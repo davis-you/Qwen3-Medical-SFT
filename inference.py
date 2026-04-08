@@ -19,9 +19,9 @@ def predict(messages, model, tokenizer):
     return response
 
 
-# 加载原下载路径的tokenizer和model
-tokenizer = AutoTokenizer.from_pretrained("./output/Qwen3-1.7B/checkpoint-1082", use_fast=False, trust_remote_code=True)
-model = AutoModelForCausalLM.from_pretrained("./output/Qwen3-1.7B/checkpoint-1082", device_map="auto", torch_dtype=torch.bfloat16)
+# tokenizer从原始模型加载，model从微调后的checkpoint加载
+tokenizer = AutoTokenizer.from_pretrained("./Qwen/Qwen3-1.7B", use_fast=False, trust_remote_code=True)
+model = AutoModelForCausalLM.from_pretrained("./output/Qwen3-1.7B/checkpoint-1084", device_map="auto", torch_dtype=torch.bfloat16)
 
 test_texts = {
     'instruction': "你是一个医学专家，你需要根据用户的问题，给出带有思考的回答。",
