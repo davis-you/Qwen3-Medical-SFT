@@ -2,12 +2,12 @@ import json
 import pandas as pd
 import torch
 from datasets import Dataset
-from modelscope import snapshot_download, AutoTokenizer
-from transformers import AutoModelForCausalLM, TrainingArguments, Trainer, DataCollatorForSeq2Seq
+from huggingface_hub import snapshot_download
+from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer, DataCollatorForSeq2Seq
 import os
 import swanlab
 
-os.environ["SWANLAB_PROJECT"]="qwen3-sft-medical"
+os.environ["SWANLAB_PROJECT"] = "qwen3-sft-medical"
 PROMPT = "你是一个医学专家，你需要根据用户的问题，给出带有思考的回答。"
 MAX_LENGTH = 2048
 
@@ -15,7 +15,8 @@ swanlab.config.update({
     "model": "Qwen/Qwen3-1.7B",
     "prompt": PROMPT,
     "data_max_length": MAX_LENGTH,
-    })
+})
+
 
 def dataset_jsonl_transfer(origin_path, new_path):
     """
@@ -48,7 +49,7 @@ def dataset_jsonl_transfer(origin_path, new_path):
 def process_func(example):
     """
     将数据集进行预处理
-    """ 
+    """
     input_ids, attention_mask, labels = [], [], []
     instruction = tokenizer(
         f"<|im_start|>system\n{PROMPT}<|im_end|>\n<|im_start|>user\n{example['input']}<|im_end|>\n<|im_start|>assistant\n",
@@ -57,14 +58,14 @@ def process_func(example):
     response = tokenizer(f"{example['output']}", add_special_tokens=False)
     input_ids = instruction["input_ids"] + response["input_ids"] + [tokenizer.pad_token_id]
     attention_mask = (
-        instruction["attention_mask"] + response["attention_mask"] + [1]
+            instruction["attention_mask"] + response["attention_mask"] + [1]
     )
     labels = [-100] * len(instruction["input_ids"]) + response["input_ids"] + [tokenizer.pad_token_id]
     if len(input_ids) > MAX_LENGTH:  # 做一个截断
         input_ids = input_ids[:MAX_LENGTH]
         attention_mask = attention_mask[:MAX_LENGTH]
         labels = labels[:MAX_LENGTH]
-    return {"input_ids": input_ids, "attention_mask": attention_mask, "labels": labels}   
+    return {"input_ids": input_ids, "attention_mask": attention_mask, "labels": labels}
 
 
 def predict(messages, model, tokenizer):
@@ -88,8 +89,9 @@ def predict(messages, model, tokenizer):
 
     return response
 
+
 # 在modelscope上下载Qwen模型到本地目录下
-model_dir = snapshot_download("Qwen/Qwen3-1.7B", cache_dir="./", revision="master")
+model_dir = snapshot_download("Qwen/Qwen3-1.7B", local_dir="./Qwen/Qwen3-1.7B")
 
 # Transformers加载模型权重
 tokenizer = AutoTokenizer.from_pretrained("./Qwen/Qwen3-1.7B", use_fast=False, trust_remote_code=True)
@@ -166,7 +168,7 @@ for index, row in test_df.iterrows():
 
     LLM:{response}
     """
-    
+
     test_text_list.append(swanlab.Text(response_text))
     print(response_text)
 
