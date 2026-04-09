@@ -1,5 +1,5 @@
 swanlab
-modelscope==1.22.0
+modelscope>=1.22.0
 transformers>=4.45.0
 datasets==3.2.0
 peft>=0.13.0
