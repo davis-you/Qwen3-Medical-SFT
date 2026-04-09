@@ -1,8 +1,11 @@
 swanlab
 modelscope==1.22.0
-transformers
+transformers>=4.45.0
 datasets==3.2.0
-peft
-accelerate
+peft>=0.13.0
+accelerate>=0.34.0
 pandas
 addict
+bitsandbytes>=0.43.0
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0

@@ -1,0 +1,282 @@
+# Qwen3-8B 医疗 QLoRA 微调 — 部署使用方案
+
+## 一、服务器环境要求
+
+| 项目 | 要求 |
+|---|---|
+| 系统 | Ubuntu 22.04 |
+| GPU | NVIDIA RTX 4090 x1 (24GB) |
+| CPU | 16 核 |
+| 内存 | 64GB |
+| CUDA | 12.1+ |
+| Python | 3.10+ |
+| 磁盘 | 至少 50GB 可用空间（模型 ~16GB + 数据集 + checkpoint） |
+
+## 二、环境搭建
+
+### 2.1 系统依赖
+
+```bash
+sudo apt update && sudo apt install -y python3-venv python3-pip git
+```
+
+### 2.2 克隆项目
+
+```bash
+git clone https://github.com/davis-you/Qwen3-Medical-SFT.git
+cd Qwen3-Medical-SFT
+```
+
+### 2.3 创建虚拟环境
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
+
+### 2.4 安装 PyTorch（CUDA 12.1）
+
+```bash
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+```
+
+> 如果服务器 CUDA 版本不同，参考 https://pytorch.org/get-started/locally/ 选择对应版本。
+
+### 2.5 安装项目依赖
+
+```bash
+pip install -r requirements.txt
+```
+
+## 三、数据准备
+
+```bash
+python data.py
+```
+
+输出：
+```
+数据集已分割完成：
+训练集大小：xxx
+验证集大小：xxx
+```
+
+会自动从 ModelScope 下载 `krisfu/delicate_medical_r1_data` 医疗问答数据集，生成 `train.jsonl` 和 `val.jsonl`。
+
+## 四、QLoRA 微调训练
+
+### 4.1 开始训练
+
+```bash
+python train_lora.py
+```
+
+### 4.2 训练参数说明
+
+| 参数 | 值 | 说明 |
+|---|---|---|
+| 基座模型 | Qwen3-8B | 从 ModelScope 自动下载 |
+| 量化方式 | NF4 4-bit + 双重量化 | QLoRA，显存 ~13-15GB |
+| LoRA rank | 16 | 适配 8B 模型容量 |
+| LoRA target | 全部 7 个投影层 | q/k/v/o/gate/up/down_proj |
+| 有效 batch size | 16 | batch=2 x grad_accum=8 |
+| 学习率 | 2e-4 | cosine scheduler + 3% warmup |
+| 优化器 | paged_adamw_8bit | 显存友好 |
+| Epoch | 2 | |
+| 序列长度 | 2048 | |
+
+### 4.3 显存监控
+
+训练过程中可另开终端监控：
+
+```bash
+watch -n 1 nvidia-smi
+```
+
+预期显存占用：**~13-15GB**，远低于 4090 的 24GB 上限。
+
+### 4.4 训练产物
+
+训练完成后，checkpoint 保存在 `./output/Qwen3-8B/` 目录下：
+
+```
+output/Qwen3-8B/
+├── checkpoint-200/
+├── checkpoint-400/
+├── checkpoint-600/
+└── ...
+```
+
+### 4.5 训练可视化
+
+项目集成了 SwanLab，训练过程中会自动记录 loss 曲线和样本预测。首次运行会要求登录 SwanLab 账号（可选跳过）。
+
+## 五、推理测试
+
+### 5.1 修改 checkpoint 路径
+
+编辑 `inference_lora.py`，将 `LORA_CHECKPOINT` 改为实际的 checkpoint 路径：
+
+```python
+LORA_CHECKPOINT = "./output/Qwen3-8B/checkpoint-400"  # 改为你的实际路径
+```
+
+### 5.2 运行推理
+
+```bash
+python inference_lora.py
+```
+
+会加载 4-bit 量化模型 + QLoRA adapter，对一个糖尿病问题进行推理测试。
+
+## 六、启动 API 服务
+
+### 6.1 基本启动
+
+```bash
+python server.py --port 8000 --checkpoint ./output/Qwen3-8B/checkpoint-400
+```
+
+启动后日志：
+```
+INFO:     Loading tokenizer from ./Qwen/Qwen3-8B
+INFO:     Loading base model in 4-bit from ./Qwen/Qwen3-8B
+INFO:     Loading QLoRA adapter from ./output/Qwen3-8B/checkpoint-400
+INFO:     Model loaded successfully
+INFO:     Uvicorn running on http://0.0.0.0:8000
+```
+
+推理模式显存占用：**~6-7GB**。
+
+### 6.2 API 端点
+
+#### POST /chat — 非流式问答
+
+```bash
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "question": "糖尿病患者饮食需要注意什么？",
+    "temperature": 0.7,
+    "top_p": 0.9
+  }'
+```
+
+响应示例：
+```json
+{
+  "question": "糖尿病患者饮食需要注意什么？",
+  "response": "<think>...思考过程...</think>\n最终回答...",
+  "thinking": "...思考过程...",
+  "answer": "最终回答...",
+  "elapsed_seconds": 12.34
+}
+```
+
+#### POST /chat/stream — 流式问答（SSE）
+
+```bash
+curl -X POST http://localhost:8000/chat/stream \
+  -H "Content-Type: application/json" \
+  -d '{"question": "高血压的治疗方案有哪些？"}' \
+  --no-buffer
+```
+
+返回 Server-Sent Events 流，逐 token 输出。
+
+#### GET /health — 健康检查
+
+```bash
+curl http://localhost:8000/health
+```
+
+响应：
+```json
+{
+  "status": "healthy",
+  "model_loaded": true,
+  "gpu_memory_allocated_gb": 5.82,
+  "gpu_memory_reserved_gb": 6.14,
+  "gpu_total_memory_gb": 24.0
+}
+```
+
+### 6.3 请求参数说明
+
+| 参数 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `question` | string | 必填 | 医学问题（1-4096 字符） |
+| `system_prompt` | string | 医学专家提示词 | 自定义系统提示词 |
+| `max_tokens` | int | 2048 | 最大生成 token 数 |
+| `temperature` | float | 0.7 | 采样温度（0=贪婪） |
+| `top_p` | float | 0.9 | 核采样概率 |
+| `stream` | bool | false | 是否流式（用 /chat/stream 更好） |
+
+### 6.4 后台运行（生产部署）
+
+```bash
+# 使用 nohup 后台运行
+nohup python server.py --port 8000 --checkpoint ./output/Qwen3-8B/checkpoint-400 \
+  > server.log 2>&1 &
+
+# 查看日志
+tail -f server.log
+
+# 停止服务
+kill $(pgrep -f "server.py")
+```
+
+或使用 systemd 管理：
+
+```bash
+sudo tee /etc/systemd/system/medical-api.service << 'EOF'
+[Unit]
+Description=Qwen3-8B Medical API
+After=network.target
+
+[Service]
+User=你的用户名
+WorkingDirectory=/path/to/Qwen3-Medical-SFT
+ExecStart=/path/to/Qwen3-Medical-SFT/venv/bin/python server.py --port 8000 --checkpoint ./output/Qwen3-8B/checkpoint-400
+Restart=on-failure
+RestartSec=10
+Environment=CUDA_VISIBLE_DEVICES=0
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable medical-api
+sudo systemctl start medical-api
+sudo systemctl status medical-api
+```
+
+## 七、完整流程速查
+
+```
+1. 环境搭建       → pip install torch + pip install -r requirements.txt
+2. 数据准备       → python data.py
+3. QLoRA 微调     → python train_lora.py          （约 2-4 小时）
+4. 推理测试       → python inference_lora.py
+5. 启动 API 服务  → python server.py --port 8000
+6. 调用接口       → curl POST /chat
+```
+
+## 八、常见问题
+
+### Q: 训练时 OOM 怎么办？
+将 `train_lora.py` 中 `per_device_train_batch_size` 改为 `1`，或将 `MAX_LENGTH` 降为 `1024`。
+
+### Q: bitsandbytes 报 CUDA 版本错误？
+确认 PyTorch CUDA 版本和系统 CUDA toolkit 一致：
+```bash
+python -c "import torch; print(torch.version.cuda)"
+nvidia-smi  # 查看驱动 CUDA 版本
+```
+
+### Q: 怎么选最佳 checkpoint？
+查看训练 log 中 eval_loss 最低的 checkpoint，或在 SwanLab 上对比各 checkpoint 的 loss 曲线。
+
+### Q: API 能否支持并发？
+单卡部署下，`inference_lock` 会自动序列化请求（一次只处理一个），其他请求排队等待。如需更高 QPS，考虑多卡部署或使用 vLLM 推理框架。
