@@ -184,32 +184,65 @@ model.eval() → 推理
 
 ## 六、API 服务 (`server.py`)
 
-### 架构
+### 双模式架构
+
+服务支持通过 `--mode` 参数切换两种加载模式：
 
 ```
-                    ┌─────────────────────────────┐
-                    │       FastAPI Application     │
-                    │                               │
- HTTP Request ──►   │  POST /chat      → 非流式推理  │
-                    │  POST /chat/stream → SSE 流式  │
-                    │  GET  /health    → 健康检查    │
-                    │                               │
-                    │  ┌──────────────────────────┐ │
-                    │  │  inference_lock (Mutex)   │ │
-                    │  │  ┌────────────────────┐  │ │
-                    │  │  │ 4-bit 量化基座模型   │  │ │
-                    │  │  │ + QLoRA Adapter     │  │ │
-                    │  │  └────────────────────┘  │ │
-                    │  └──────────────────────────┘ │
-                    └─────────────────────────────┘
+                    ┌──────────────────────────────────┐
+                    │        FastAPI Application        │
+                    │                                    │
+ HTTP Request ──►   │  POST /chat      → 非流式推理      │
+                    │  POST /chat/stream → SSE 流式      │
+                    │  GET  /health    → 健康检查+模式    │
+                    │                                    │
+                    │  ┌────────────────────────────┐   │
+                    │  │   inference_lock (Mutex)    │   │
+                    │  │                            │   │
+                    │  │  --mode lora               │   │
+                    │  │  ┌──────────────────────┐  │   │
+                    │  │  │ 基座模型 (NF4 4-bit)  │  │   │
+                    │  │  │ + QLoRA Adapter       │  │   │
+                    │  │  └──────────────────────┘  │   │
+                    │  │                            │   │
+                    │  │  --mode full               │   │
+                    │  │  ┌──────────────────────┐  │   │
+                    │  │  │ 完整 checkpoint 权重   │  │   │
+                    │  │  │ (bfloat16 直接加载)   │  │   │
+                    │  │  └──────────────────────┘  │   │
+                    │  └────────────────────────────┘   │
+                    └──────────────────────────────────┘
 ```
+
+### 启动方式
+
+```bash
+# QLoRA 模式（默认）— Qwen3-8B + 4-bit 量化 + LoRA adapter
+python server.py --mode lora
+
+# 全参微调模式 — Qwen3-1.7B 完整 checkpoint
+python server.py --mode full
+
+# 自定义模型路径和 checkpoint
+python server.py --mode full --model-path ./Qwen/Qwen3-1.7B --checkpoint ./output/Qwen3-1.7B/checkpoint-1084
+```
+
+### 模型加载逻辑
+
+| 参数 | `--mode lora`（默认） | `--mode full` |
+|------|----------------------|---------------|
+| 默认 model-path | `./Qwen/Qwen3-8B` | `./Qwen/Qwen3-1.7B` |
+| 默认 checkpoint | `./output/Qwen3-8B/checkpoint-best` | `./output/Qwen3-1.7B/checkpoint-1084` |
+| 加载方式 | BitsAndBytes 4-bit 量化基座 + `PeftModel` adapter | `AutoModelForCausalLM` 直接加载 checkpoint |
+| 推理显存 | ~6-7GB | ~4-5GB |
 
 ### 核心设计
 
-1. **Lifespan 管理**：FastAPI 的 `lifespan` 上下文管理器负责启动时加载模型、关闭时释放显存
-2. **线程安全**：`inference_lock` (threading.Lock) 保证单卡环境下推理请求串行执行，避免 GPU 显存冲突
-3. **流式输出**：使用 Transformers 的 `TextIteratorStreamer`，在独立线程中运行 `model.generate()`，主线程通过迭代器逐 token 返回 SSE 事件
-4. **R1 响应解析**：`parse_thinking_response()` 将 `<think>...</think>` 标签拆分为思考过程和最终回答，API 返回结构化的 `thinking` + `answer` 字段
+1. **双模式加载**：`lifespan` 根据 `--mode` 参数调用 `load_model_lora()` 或 `load_model_full()`，上层推理逻辑完全共用
+2. **Lifespan 管理**：FastAPI 的 `lifespan` 上下文管理器负责启动时加载模型、关闭时释放显存
+3. **线程安全**：`inference_lock` (threading.Lock) 保证单卡环境下推理请求串行执行，避免 GPU 显存冲突
+4. **流式输出**：使用 Transformers 的 `TextIteratorStreamer`，在独立线程中运行 `model.generate()`，主线程通过迭代器逐 token 返回 SSE 事件
+5. **R1 响应解析**：`parse_thinking_response()` 将 `<think>...</think>` 标签拆分为思考过程和最终回答，API 返回结构化的 `thinking` + `answer` 字段
 
 ### API 端点
 
@@ -217,7 +250,7 @@ model.eval() → 推理
 |------|------|------|
 | `/chat` | POST | 非流式问答，返回完整 JSON |
 | `/chat/stream` | POST | SSE 流式输出，逐 token 推送 |
-| `/health` | GET | 健康检查 + GPU 显存状态 |
+| `/health` | GET | 健康检查 + GPU 显存状态 + 当前模式 |
 
 ---
 

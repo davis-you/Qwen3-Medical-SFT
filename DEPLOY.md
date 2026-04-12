@@ -131,22 +131,48 @@ python inference_lora.py
 
 ## 六、启动 API 服务
 
-### 6.1 基本启动
+API 服务支持两种模式，通过 `--mode` 参数切换：
+
+| 模式 | 说明 | 显存占用 |
+|------|------|---------|
+| `lora`（默认） | Qwen3-8B + 4-bit 量化 + QLoRA adapter | ~6-7GB |
+| `full` | Qwen3-1.7B 全参微调 checkpoint 直接加载 | ~4-5GB |
+
+### 6.1 QLoRA 模式启动（默认）
 
 ```bash
-python server.py --port 8000 --checkpoint ./output/Qwen3-8B/checkpoint-400
+python server.py --mode lora --port 8000 --checkpoint ./output/Qwen3-8B/checkpoint-400
 ```
 
 启动后日志：
 ```
-INFO:     Loading tokenizer from ./Qwen/Qwen3-8B
-INFO:     Loading base model in 4-bit from ./Qwen/Qwen3-8B
-INFO:     Loading QLoRA adapter from ./output/Qwen3-8B/checkpoint-400
-INFO:     Model loaded successfully
+INFO:     Starting server: mode=lora, model=./Qwen/Qwen3-8B, checkpoint=./output/Qwen3-8B/checkpoint-400
+INFO:     [lora] Loading tokenizer from ./Qwen/Qwen3-8B
+INFO:     [lora] Loading base model in 4-bit from ./Qwen/Qwen3-8B
+INFO:     [lora] Loading QLoRA adapter from ./output/Qwen3-8B/checkpoint-400
+INFO:     [lora] Model loaded successfully
 INFO:     Uvicorn running on http://0.0.0.0:8000
 ```
 
-推理模式显存占用：**~6-7GB**。
+### 6.1.1 全参微调模式启动
+
+```bash
+python server.py --mode full --port 8000 --checkpoint ./output/Qwen3-1.7B/checkpoint-1084
+```
+
+启动后日志：
+```
+INFO:     Starting server: mode=full, model=./Qwen/Qwen3-1.7B, checkpoint=./output/Qwen3-1.7B/checkpoint-1084
+INFO:     [full] Loading tokenizer from ./Qwen/Qwen3-1.7B
+INFO:     [full] Loading model from ./output/Qwen3-1.7B/checkpoint-1084
+INFO:     [full] Model loaded successfully
+INFO:     Uvicorn running on http://0.0.0.0:8000
+```
+
+也可以自定义模型路径：
+```bash
+python server.py --mode full --model-path ./Qwen/Qwen3-1.7B --checkpoint ./output/Qwen3-1.7B/checkpoint-1084 --port 8080
+```
 
 ### 6.2 API 端点
 
@@ -194,6 +220,7 @@ curl http://localhost:8000/health
 ```json
 {
   "status": "healthy",
+  "mode": "lora",
   "model_loaded": true,
   "gpu_memory_allocated_gb": 5.82,
   "gpu_memory_reserved_gb": 6.14,
@@ -215,9 +242,13 @@ curl http://localhost:8000/health
 ### 6.4 后台运行（生产部署）
 
 ```bash
-# 使用 nohup 后台运行
-nohup python server.py --port 8000 --checkpoint ./output/Qwen3-8B/checkpoint-400 \
+# QLoRA 模式后台运行
+nohup python server.py --mode lora --port 8000 --checkpoint ./output/Qwen3-8B/checkpoint-400 \
   > server.log 2>&1 &
+
+# 全参微调模式后台运行
+# nohup python server.py --mode full --port 8000 --checkpoint ./output/Qwen3-1.7B/checkpoint-1084 \
+#   > server.log 2>&1 &
 
 # 查看日志
 tail -f server.log
@@ -231,13 +262,13 @@ kill $(pgrep -f "server.py")
 ```bash
 sudo tee /etc/systemd/system/medical-api.service << 'EOF'
 [Unit]
-Description=Qwen3-8B Medical API
+Description=Qwen3 Medical API
 After=network.target
 
 [Service]
 User=你的用户名
 WorkingDirectory=/path/to/Qwen3-Medical-SFT
-ExecStart=/path/to/Qwen3-Medical-SFT/venv/bin/python server.py --port 8000 --checkpoint ./output/Qwen3-8B/checkpoint-400
+ExecStart=/path/to/Qwen3-Medical-SFT/venv/bin/python server.py --mode lora --port 8000 --checkpoint ./output/Qwen3-8B/checkpoint-400
 Restart=on-failure
 RestartSec=10
 Environment=CUDA_VISIBLE_DEVICES=0
@@ -257,9 +288,17 @@ sudo systemctl status medical-api
 ```
 1. 环境搭建       → pip install torch + pip install -r requirements.txt
 2. 数据准备       → python data.py
-3. QLoRA 微调     → python train_lora.py          （约 2-4 小时）
-4. 推理测试       → python inference_lora.py
-5. 启动 API 服务  → python server.py --port 8000
+
+方案 A — QLoRA 微调 (Qwen3-8B):
+3a. 训练          → python train_lora.py                              （约 2-4 小时）
+4a. 推理测试      → python inference_lora.py
+5a. 启动 API      → python server.py --mode lora --port 8000
+
+方案 B — 全参微调 (Qwen3-1.7B):
+3b. 训练          → python train.py                                   （约 1-2 小时）
+4b. 推理测试      → python inference.py
+5b. 启动 API      → python server.py --mode full --port 8000
+
 6. 调用接口       → curl POST /chat
 ```
 
