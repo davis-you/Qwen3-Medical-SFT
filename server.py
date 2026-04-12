@@ -2,14 +2,14 @@
 Qwen3 Medical 推理 API 服务（支持全参微调 + QLoRA）
 
 启动方式:
-    # QLoRA 模式（默认，Qwen3-8B + 4-bit 量化 + LoRA adapter）
+    # QLoRA 模式（默认，Qwen3-8B + 4-bit 量化 + LoRA adapter，默认端口 6007）
     python server.py --mode lora --checkpoint ./output/Qwen3-8B/checkpoint-best
 
     # 全参微调模式（Qwen3-1.7B，直接加载 checkpoint）
     python server.py --mode full --model-path ./Qwen/Qwen3-1.7B --checkpoint ./output/Qwen3-1.7B/checkpoint-1084
 
     # 自定义端口
-    python server.py --mode full --port 8080 --checkpoint ./output/Qwen3-1.7B/checkpoint-1084
+    python server.py --mode full --port 34567 --checkpoint ./output/Qwen3-1.7B/checkpoint-1084
 """
 
 import argparse
@@ -307,7 +307,7 @@ async def health():
 # ===================== 入口 =====================
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Medical API Server")
-    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--port", type=int, default=6007)
     parser.add_argument("--host", type=str, default="0.0.0.0")
     parser.add_argument("--mode", type=str, default="lora", choices=["full", "lora"],
                         help="full: 全参微调模型, lora: QLoRA 微调模型")

@@ -202,7 +202,7 @@ API 服务支持两种模式，通过 `--mode` 参数切换：
 ### 6.1 QLoRA 模式启动（默认）
 
 ```bash
-python server.py --mode lora --port 8000 --checkpoint ./output/Qwen3-8B/checkpoint-400
+python server.py --mode lora --port 6007 --checkpoint ./output/Qwen3-8B/checkpoint-400
 ```
 
 启动后日志：
@@ -212,13 +212,13 @@ INFO:     [lora] Loading tokenizer from ./Qwen/Qwen3-8B
 INFO:     [lora] Loading base model in 4-bit from ./Qwen/Qwen3-8B
 INFO:     [lora] Loading QLoRA adapter from ./output/Qwen3-8B/checkpoint-400
 INFO:     [lora] Model loaded successfully
-INFO:     Uvicorn running on http://0.0.0.0:8000
+INFO:     Uvicorn running on http://0.0.0.0:6007
 ```
 
 ### 6.1.1 全参微调模式启动
 
 ```bash
-python server.py --mode full --port 8000 --checkpoint ./output/Qwen3-1.7B/checkpoint-1084
+python server.py --mode full --port 6007 --checkpoint ./output/Qwen3-1.7B/checkpoint-1084
 ```
 
 启动后日志：
@@ -227,7 +227,7 @@ INFO:     Starting server: mode=full, model=./Qwen/Qwen3-1.7B, checkpoint=./outp
 INFO:     [full] Loading tokenizer from ./Qwen/Qwen3-1.7B
 INFO:     [full] Loading model from ./output/Qwen3-1.7B/checkpoint-1084
 INFO:     [full] Model loaded successfully
-INFO:     Uvicorn running on http://0.0.0.0:8000
+INFO:     Uvicorn running on http://0.0.0.0:6007
 ```
 
 也可以自定义模型路径：
@@ -240,7 +240,7 @@ python server.py --mode full --model-path ./Qwen/Qwen3-1.7B --checkpoint ./outpu
 #### POST /chat — 非流式问答
 
 ```bash
-curl -X POST http://localhost:8000/chat \
+curl -X POST http://localhost:6007/chat \
   -H "Content-Type: application/json" \
   -d '{
     "question": "糖尿病患者饮食需要注意什么？",
@@ -263,7 +263,7 @@ curl -X POST http://localhost:8000/chat \
 #### POST /chat/stream — 流式问答（SSE）
 
 ```bash
-curl -X POST http://localhost:8000/chat/stream \
+curl -X POST http://localhost:6007/chat/stream \
   -H "Content-Type: application/json" \
   -d '{"question": "高血压的治疗方案有哪些？"}' \
   --no-buffer
@@ -274,7 +274,7 @@ curl -X POST http://localhost:8000/chat/stream \
 #### GET /health — 健康检查
 
 ```bash
-curl http://localhost:8000/health
+curl http://localhost:6007/health
 ```
 
 响应：
@@ -304,11 +304,11 @@ curl http://localhost:8000/health
 
 ```bash
 # QLoRA 模式后台运行
-nohup python server.py --mode lora --port 8000 --checkpoint ./output/Qwen3-8B/checkpoint-400 \
+nohup python server.py --mode lora --port 6007 --checkpoint ./output/Qwen3-8B/checkpoint-400 \
   > server.log 2>&1 &
 
 # 全参微调模式后台运行
-# nohup python server.py --mode full --port 8000 --checkpoint ./output/Qwen3-1.7B/checkpoint-1084 \
+# nohup python server.py --mode full --port 6007 --checkpoint ./output/Qwen3-1.7B/checkpoint-1084 \
 #   > server.log 2>&1 &
 
 # 查看日志
@@ -329,7 +329,7 @@ After=network.target
 [Service]
 User=你的用户名
 WorkingDirectory=/path/to/Qwen3-Medical-SFT
-ExecStart=/path/to/Qwen3-Medical-SFT/venv/bin/python server.py --mode lora --port 8000 --checkpoint ./output/Qwen3-8B/checkpoint-400
+ExecStart=/path/to/Qwen3-Medical-SFT/venv/bin/python server.py --mode lora --port 6007 --checkpoint ./output/Qwen3-8B/checkpoint-400
 Restart=on-failure
 RestartSec=10
 Environment=CUDA_VISIBLE_DEVICES=0
@@ -353,12 +353,12 @@ sudo systemctl status medical-api
 方案 A — QLoRA 微调 (Qwen3-8B):
 3a. 训练          → python train_lora.py                              （约 2-4 小时）
 4a. 推理测试      → python inference_lora.py
-5a. 启动 API      → python server.py --mode lora --port 8000
+5a. 启动 API      → python server.py --mode lora --port 6007
 
 方案 B — 全参微调 (Qwen3-1.7B):
 3b. 训练          → python train.py                                   （约 1-2 小时）
 4b. 推理测试      → python inference.py
-5b. 启动 API      → python server.py --mode full --port 8000
+5b. 启动 API      → python server.py --mode full --port 6007
 
 6. 调用接口       → curl POST /chat
 ```
