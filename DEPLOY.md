@@ -63,15 +63,24 @@ python data.py
 
 会自动从 ModelScope 下载 `krisfu/delicate_medical_r1_data` 医疗问答数据集，生成 `train.jsonl` 和 `val.jsonl`。
 
-## 四、QLoRA 微调训练
+## 四、微调训练
 
-### 4.1 开始训练
+项目提供两种微调方案，根据算力条件选择：
+
+| 方案 | 脚本 | 模型 | 显存需求 | 训练时间 |
+|------|------|------|---------|---------|
+| **方案 A：QLoRA 微调** | `train_lora.py` | Qwen3-8B | ~13-15GB | ~2-4 小时 |
+| **方案 B：全参微调** | `train.py` | Qwen3-1.7B | ~32GB | ~1-2 小时 |
+
+### 方案 A：QLoRA 微调（Qwen3-8B）
+
+#### A.1 开始训练
 
 ```bash
 python train_lora.py
 ```
 
-### 4.2 训练参数说明
+#### A.2 训练参数说明
 
 | 参数 | 值 | 说明 |
 |---|---|---|
@@ -79,13 +88,59 @@ python train_lora.py
 | 量化方式 | NF4 4-bit + 双重量化 | QLoRA，显存 ~13-15GB |
 | LoRA rank | 16 | 适配 8B 模型容量 |
 | LoRA target | 全部 7 个投影层 | q/k/v/o/gate/up/down_proj |
-| 有效 batch size | 16 | batch=2 x grad_accum=8 |
+| 有效 batch size | 16 | batch=2 × grad_accum=8 |
 | 学习率 | 2e-4 | cosine scheduler + 3% warmup |
 | 优化器 | paged_adamw_8bit | 显存友好 |
 | Epoch | 2 | |
 | 序列长度 | 2048 | |
 
-### 4.3 显存监控
+#### A.3 训练产物
+
+```
+output/Qwen3-8B/
+├── checkpoint-200/    ← LoRA adapter 权重
+├── checkpoint-400/
+├── checkpoint-600/
+└── ...
+```
+
+> 注意：QLoRA 的 checkpoint 只包含 LoRA adapter 权重（~几十 MB），推理时需要同时加载基座模型 + adapter。
+
+### 方案 B：全参微调（Qwen3-1.7B）
+
+#### B.1 开始训练
+
+```bash
+python train.py
+```
+
+#### B.2 训练参数说明
+
+| 参数 | 值 | 说明 |
+|---|---|---|
+| 基座模型 | Qwen3-1.7B | 从 ModelScope 自动下载 |
+| 微调方式 | 全参数微调 | 更新所有模型权重 |
+| 有效 batch size | 4 | batch=1 × grad_accum=4 |
+| 学习率 | 1e-4 | 线性 scheduler |
+| 精度 | bfloat16 | |
+| Epoch | 2 | |
+| 序列长度 | 2048 | |
+
+#### B.3 训练产物
+
+```
+output/Qwen3-1.7B/
+├── checkpoint-400/    ← 完整模型权重
+├── checkpoint-800/
+├── checkpoint-1084/
+└── ...
+```
+
+> 注意：全参微调的 checkpoint 包含完整模型权重（~3.4GB），推理时直接加载 checkpoint 即可。
+
+### 通用说明
+
+#### 显存监控
 
 训练过程中可另开终端监控：
 
@@ -93,27 +148,21 @@ python train_lora.py
 watch -n 1 nvidia-smi
 ```
 
-预期显存占用：**~13-15GB**，远低于 4090 的 24GB 上限。
+预期显存占用：
+- **QLoRA (8B)**：~13-15GB
+- **全参微调 (1.7B)**：~32GB
 
-### 4.4 训练产物
-
-训练完成后，checkpoint 保存在 `./output/Qwen3-8B/` 目录下：
-
-```
-output/Qwen3-8B/
-├── checkpoint-200/
-├── checkpoint-400/
-├── checkpoint-600/
-└── ...
-```
-
-### 4.5 训练可视化
+#### 训练可视化
 
 项目集成了 SwanLab，训练过程中会自动记录 loss 曲线和样本预测。首次运行会要求登录 SwanLab 账号（可选跳过）。
 
+#### 两种方案效果对比
+
+经测试全参数微调效果略优于 QLoRA，但 QLoRA 可以训练更大的模型（8B vs 1.7B），综合效果 QLoRA 8B 更有优势。
+
 ## 五、推理测试
 
-### 5.1 修改 checkpoint 路径
+### 方案 A：QLoRA 推理
 
 编辑 `inference_lora.py`，将 `LORA_CHECKPOINT` 改为实际的 checkpoint 路径：
 
@@ -121,13 +170,25 @@ output/Qwen3-8B/
 LORA_CHECKPOINT = "./output/Qwen3-8B/checkpoint-400"  # 改为你的实际路径
 ```
 
-### 5.2 运行推理
-
 ```bash
 python inference_lora.py
 ```
 
-会加载 4-bit 量化模型 + QLoRA adapter，对一个糖尿病问题进行推理测试。
+会加载 4-bit 量化基座模型 + QLoRA adapter，对一个糖尿病问题进行推理测试。
+
+### 方案 B：全参微调推理
+
+编辑 `inference.py`，将 checkpoint 路径改为实际路径：
+
+```python
+model = AutoModelForCausalLM.from_pretrained("./output/Qwen3-1.7B/checkpoint-1084", ...)
+```
+
+```bash
+python inference.py
+```
+
+直接加载完整 checkpoint 权重进行推理，兼容 CUDA / MPS (Apple Silicon) / CPU。
 
 ## 六、启动 API 服务
 
