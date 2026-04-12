@@ -1,10 +1,15 @@
 """
-Qwen3-8B Medical QLoRA 推理 API 服务
+Qwen3 Medical 推理 API 服务（支持全参微调 + QLoRA）
 
 启动方式:
-    python server.py                                           # 默认 8000 端口
-    python server.py --port 8080                               # 自定义端口
-    python server.py --checkpoint ./output/Qwen3-8B/checkpoint-200  # 指定 checkpoint
+    # QLoRA 模式（默认，Qwen3-8B + 4-bit 量化 + LoRA adapter）
+    python server.py --mode lora --checkpoint ./output/Qwen3-8B/checkpoint-best
+
+    # 全参微调模式（Qwen3-1.7B，直接加载 checkpoint）
+    python server.py --mode full --model-path ./Qwen/Qwen3-1.7B --checkpoint ./output/Qwen3-1.7B/checkpoint-1084
+
+    # 自定义端口
+    python server.py --mode full --port 8080 --checkpoint ./output/Qwen3-1.7B/checkpoint-1084
 """
 
 import argparse
@@ -30,8 +35,6 @@ from transformers import (
 from peft import PeftModel
 
 # ===================== 配置 =====================
-MODEL_LOCAL_PATH = "./Qwen/Qwen3-8B"
-DEFAULT_CHECKPOINT = "./output/Qwen3-8B/checkpoint-best"
 SYSTEM_PROMPT = "你是一个医学专家，你需要根据用户的问题，给出带有思考的回答。"
 MAX_NEW_TOKENS = 2048
 
@@ -41,18 +44,19 @@ logger = logging.getLogger("medical-server")
 model = None
 tokenizer = None
 inference_lock = threading.Lock()
+current_mode = None
 
 
-def load_model(checkpoint_path: str):
-    """加载 4-bit 量化基座模型 + QLoRA adapter"""
+def load_model_lora(model_path: str, checkpoint_path: str):
+    """QLoRA 模式：加载 4-bit 量化基座模型 + LoRA adapter"""
     global model, tokenizer
 
-    logger.info("Loading tokenizer from %s", MODEL_LOCAL_PATH)
+    logger.info("[lora] Loading tokenizer from %s", model_path)
     tokenizer = AutoTokenizer.from_pretrained(
-        MODEL_LOCAL_PATH, use_fast=False, trust_remote_code=True
+        model_path, use_fast=False, trust_remote_code=True
     )
 
-    logger.info("Loading base model in 4-bit from %s", MODEL_LOCAL_PATH)
+    logger.info("[lora] Loading base model in 4-bit from %s", model_path)
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_quant_type="nf4",
@@ -60,23 +64,50 @@ def load_model(checkpoint_path: str):
         bnb_4bit_use_double_quant=True,
     )
     model = AutoModelForCausalLM.from_pretrained(
-        MODEL_LOCAL_PATH,
+        model_path,
         device_map="auto",
         torch_dtype=torch.bfloat16,
         quantization_config=bnb_config,
     )
 
-    logger.info("Loading QLoRA adapter from %s", checkpoint_path)
+    logger.info("[lora] Loading QLoRA adapter from %s", checkpoint_path)
     model = PeftModel.from_pretrained(model, model_id=checkpoint_path)
     model.eval()
-    logger.info("Model loaded successfully")
+    logger.info("[lora] Model loaded successfully")
+
+
+def load_model_full(model_path: str, checkpoint_path: str):
+    """全参微调模式：直接加载 checkpoint 完整权重"""
+    global model, tokenizer
+
+    logger.info("[full] Loading tokenizer from %s", model_path)
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_path, use_fast=False, trust_remote_code=True
+    )
+
+    logger.info("[full] Loading model from %s", checkpoint_path)
+    model = AutoModelForCausalLM.from_pretrained(
+        checkpoint_path,
+        device_map="auto",
+        torch_dtype=torch.bfloat16,
+    )
+    model.eval()
+    logger.info("[full] Model loaded successfully")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """启动时加载模型，关闭时释放显存"""
-    checkpoint = getattr(app.state, "checkpoint_path", DEFAULT_CHECKPOINT)
-    load_model(checkpoint)
+    global current_mode
+    mode = getattr(app.state, "mode", "lora")
+    model_path = getattr(app.state, "model_path", "./Qwen/Qwen3-8B")
+    checkpoint = getattr(app.state, "checkpoint_path", "./output/Qwen3-8B/checkpoint-best")
+    current_mode = mode
+
+    if mode == "lora":
+        load_model_lora(model_path, checkpoint)
+    else:
+        load_model_full(model_path, checkpoint)
     yield
     global model, tokenizer
     del model, tokenizer
@@ -85,9 +116,9 @@ async def lifespan(app: FastAPI):
 
 # ===================== FastAPI =====================
 app = FastAPI(
-    title="Qwen3-8B Medical API",
-    description="QLoRA 微调医疗推理模型 API",
-    version="1.0.0",
+    title="Qwen3 Medical API",
+    description="医疗推理模型 API（支持全参微调 + QLoRA）",
+    version="1.1.0",
     lifespan=lifespan,
 )
 
@@ -119,6 +150,7 @@ class ChatResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
+    mode: Optional[str] = None
     model_loaded: bool
     gpu_memory_allocated_gb: float
     gpu_memory_reserved_gb: float
@@ -264,6 +296,7 @@ async def health():
 
     return HealthResponse(
         status="healthy" if model is not None else "loading",
+        mode=current_mode,
         model_loaded=model is not None,
         gpu_memory_allocated_gb=round(allocated, 2),
         gpu_memory_reserved_gb=round(reserved, 2),
@@ -273,13 +306,27 @@ async def health():
 
 # ===================== 入口 =====================
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Medical QLoRA API Server")
+    parser = argparse.ArgumentParser(description="Medical API Server")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--host", type=str, default="0.0.0.0")
-    parser.add_argument("--checkpoint", type=str, default=DEFAULT_CHECKPOINT)
+    parser.add_argument("--mode", type=str, default="lora", choices=["full", "lora"],
+                        help="full: 全参微调模型, lora: QLoRA 微调模型")
+    parser.add_argument("--model-path", type=str, default=None,
+                        help="原始模型路径（默认: lora→./Qwen/Qwen3-8B, full→./Qwen/Qwen3-1.7B）")
+    parser.add_argument("--checkpoint", type=str, default=None,
+                        help="checkpoint 路径（默认: lora→./output/Qwen3-8B/checkpoint-best, full→./output/Qwen3-1.7B/checkpoint-1084）")
     args = parser.parse_args()
 
+    # 根据 mode 设置默认值
+    if args.model_path is None:
+        args.model_path = "./Qwen/Qwen3-8B" if args.mode == "lora" else "./Qwen/Qwen3-1.7B"
+    if args.checkpoint is None:
+        args.checkpoint = "./output/Qwen3-8B/checkpoint-best" if args.mode == "lora" else "./output/Qwen3-1.7B/checkpoint-1084"
+
+    app.state.mode = args.mode
+    app.state.model_path = args.model_path
     app.state.checkpoint_path = args.checkpoint
 
     logging.basicConfig(level=logging.INFO)
+    logger.info("Starting server: mode=%s, model=%s, checkpoint=%s", args.mode, args.model_path, args.checkpoint)
     uvicorn.run(app, host=args.host, port=args.port)
